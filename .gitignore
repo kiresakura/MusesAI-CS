@@ -4,7 +4,7 @@
 # 資料檔案（知識庫原始資料、計畫文件）
 *.xlsx
 *.csv
-後端檔案存放處/knowledge-base.json
+knowledge-base.json
 
 # Python
 *.pyc
