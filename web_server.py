@@ -2,7 +2,7 @@
 繆思精工客服系統 — Web Server
 
 Flask HTTP 伺服器，提供以下 endpoints：
-- GET  /health   → 健康檢查
+- GET  /health   → 健康檢查（含運行時間、SQLite 狀態、最後成功回覆時間）
 - POST /chat     → 客服對話 API
 - GET  /webhook  → Meta Messenger 驗證
 - POST /webhook  → Meta Messenger 訊息處理
@@ -12,7 +12,9 @@ import hashlib
 import hmac
 import json
 import logging
+import logging.handlers
 import os
+import sqlite3
 import sys
 import time
 
@@ -21,6 +23,7 @@ import requests as http_requests
 
 import rag_config
 import chatbot_service
+from error_handler import DB_PATH
 
 # ============================================================
 # Flask App 初始化
@@ -28,12 +31,32 @@ import chatbot_service
 
 app = Flask(__name__)
 
-# Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+# ============================================================
+# Logging（RotatingFileHandler + stdout）
+# ============================================================
+
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
+_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+_LOG_DIR = os.path.expanduser("~/Library/Logs/muses-chatbot")
+_LOG_FILE = os.path.join(_LOG_DIR, "chatbot.log")
+
+os.makedirs(_LOG_DIR, exist_ok=True)
+
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.INFO)
+
+# 檔案日誌：10MB per file, 保留最近 5 個
+_file_handler = logging.handlers.RotatingFileHandler(
+    _LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
 )
+_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+_root_logger.addHandler(_file_handler)
+
+# stdout 日誌（方便即時除錯）
+_stream_handler = logging.StreamHandler(sys.stdout)
+_stream_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+_root_logger.addHandler(_stream_handler)
+
 logger = logging.getLogger(__name__)
 
 # 環境變數
@@ -42,8 +65,10 @@ META_PAGE_ACCESS_TOKEN = os.environ.get("META_PAGE_ACCESS_TOKEN", "")
 META_APP_SECRET = os.environ.get("META_APP_SECRET", "")
 PORT = int(os.environ.get("PORT", 8080))
 
-# 向量資料庫載入狀態
+# 運行狀態追蹤
 _entries_count = 0
+_start_time = time.time()
+_last_successful_reply = None
 
 
 # ============================================================
@@ -91,11 +116,37 @@ def log_response(response):
 
 @app.route("/health", methods=["GET"])
 def health():
-    """健康檢查。"""
+    """
+    健康檢查端點。
+
+    回傳：服務狀態、運行時間、知識庫筆數、SQLite 連線狀態、最後成功回覆時間。
+    """
+    uptime_seconds = time.time() - _start_time
+    days, remainder = divmod(int(uptime_seconds), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    uptime_str = f"{days}d {hours}h {minutes}m {seconds}s"
+
+    # SQLite 連線測試
+    sqlite_ok = False
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=3)
+        conn.execute("SELECT 1")
+        conn.close()
+        sqlite_ok = True
+    except Exception:
+        pass
+
+    status = "ok" if (sqlite_ok and _entries_count > 0) else "degraded"
+
     return jsonify({
-        "status": "ok",
+        "status": status,
         "version": "1.0.0",
+        "uptime": uptime_str,
+        "uptime_seconds": round(uptime_seconds),
         "entries": _entries_count,
+        "sqlite_ok": sqlite_ok,
+        "last_successful_reply": _last_successful_reply,
     })
 
 
@@ -119,14 +170,21 @@ def chat():
 
     logger.info(f"💬 [chat] user={user_id} message={message[:80]}")
 
+    # channel 可由呼叫端指定（預設 universal）
+    channel = data.get("channel", "universal")
+
     try:
-        result = chatbot_service.process_message(user_id, message)
+        global _last_successful_reply
+        result = chatbot_service.process_message(user_id, message, channel=channel)
+        _last_successful_reply = time.strftime("%Y-%m-%d %H:%M:%S")
         return jsonify({
             "reply": result["reply"],
             "intent": result["intent"],
             "confidence": result.get("confidence", 0.0),
             "source": result.get("source", "unknown"),
-            "references": [],  # TODO: 未來可加入引用資料
+            "attachments": result.get("attachments", []),
+            "follow_up_messages": result.get("follow_up_messages", []),
+            "references": [],
         })
     except Exception as e:
         logger.error(f"❌ [chat] 處理失敗：{e}")
@@ -201,12 +259,18 @@ def webhook_receive():
             logger.info(f"📩 [webhook] sender={sender_id} message={message_text[:80]}")
 
             try:
-                # 呼叫客服系統處理
-                result = chatbot_service.process_message(sender_id, message_text)
-                reply_text = result["reply"]
+                global _last_successful_reply
+                # 呼叫客服系統處理（Messenger 來源固定為 fb）
+                result = chatbot_service.process_message(
+                    sender_id, message_text, channel="fb"
+                )
+                _last_successful_reply = time.strftime("%Y-%m-%d %H:%M:%S")
+                # 主回覆
+                _send_messenger_reply(sender_id, result["reply"])
 
-                # 用 Meta Send API 回覆
-                _send_messenger_reply(sender_id, reply_text)
+                # 身分確認後的 must-send cascade（SR-001、SR-040、SR-022 等）
+                for follow_up in result.get("follow_up_messages", []):
+                    _send_messenger_reply(sender_id, follow_up["content"])
 
             except Exception as e:
                 logger.error(f"❌ [webhook] 處理失敗：{e}")

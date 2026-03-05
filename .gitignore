@@ -16,6 +16,8 @@ build/
 
 # 運行時產生的檔案
 chatbot.db
+chatbot.db-shm
+chatbot.db-wal
 error_log.json
 
 # macOS

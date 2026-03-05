@@ -25,6 +25,7 @@
 import json
 import os
 import random
+import requests
 import sqlite3
 import sys
 import time
@@ -32,6 +33,8 @@ from datetime import datetime, timedelta
 
 # 載入各模組
 import intent_classifier
+import scripted_responses
+import user_state
 from error_handler import handle_error, DB_PATH
 from rag_config import (
     GREETING_RESPONSES,
@@ -287,24 +290,104 @@ def _generate_rag_response(user_id: str, message: str, intent: str) -> str:
 
 
 # ============================================================
+# 身分確認後的問候語錄 cascade
+# ============================================================
+
+# 身分 → 主問候語錄 ID
+_IDENTITY_GREETING_ID = {
+    "designer":     "SR-020",
+    "manufacturer": "SR-003",
+    "owner":        None,       # 屋主無專屬語錄，用通用問候
+}
+
+# 身分確認後必帶的 must-send 語錄（依序發出）
+_IDENTITY_MUST_SENDS = ("SR-001", "SR-040", "SR-022")
+
+
+def _build_identity_reply(identity: str):
+    """
+    回傳身分確認後的主回覆文字，以及後續 follow_up_messages 清單。
+
+    follow_up_messages 格式：[{"content": str, "attachments": list}, ...]
+    """
+    greeting_id = _IDENTITY_GREETING_ID.get(identity)
+    if greeting_id:
+        s = scripted_responses.get_by_id(greeting_id)
+        reply = s["content"] if s else random.choice(GREETING_RESPONSES)
+    else:
+        reply = random.choice(GREETING_RESPONSES)
+
+    follow_ups = []
+    for must_id in _IDENTITY_MUST_SENDS:
+        s = scripted_responses.get_by_id(must_id)
+        if s:
+            f = scripted_responses.format_reply(s)
+            follow_ups.append({"content": f["reply"], "attachments": f["attachments"]})
+
+    return reply, follow_ups
+
+
+# ============================================================
+# 追問附加
+# ============================================================
+
+# 屬於這些類別的語錄回覆後不附加產品追問（話題已偏離當前產品焦點）
+_NO_PROBE_CATEGORIES = frozenset({"store", "follow_up", "identity", "general"})
+
+
+def _append_probe(reply: str, user_id: str, ustate: dict, scripted_category: str = None) -> str:
+    """
+    如果當前狀態有待追問，將追問文字附加在回覆尾端並更新計數。
+
+    scripted_category: 本次語錄的分類；屬於 _NO_PROBE_CATEGORIES 時略過追問。
+    回傳（可能已附加追問的）回覆字串。
+    """
+    if scripted_category in _NO_PROBE_CATEGORIES:
+        return reply
+    result = user_state.get_next_probe(ustate)
+    if result is None:
+        return reply
+    probe_text, probe_key = result
+    user_state.increment_probe(user_id, probe_key, ustate["probe_counts"])
+    ustate["probe_counts"][probe_key] = ustate["probe_counts"].get(probe_key, 0) + 1
+    return reply + "\n\n" + probe_text
+
+
+# ============================================================
 # 主入口
 # ============================================================
 
-def process_message(user_id: str, message: str, verbose: bool = False) -> dict:
+def process_message(
+    user_id: str,
+    message: str,
+    verbose: bool = False,
+    channel: str = "universal",
+) -> dict:
     """
     處理客戶訊息的主入口。
 
-    參數：
-        user_id: 使用者 ID
-        message: 客戶訊息
-        verbose: 是否印出處理過程
+    處理順序：
+      1. 載入用戶狀態
+      2. 偵測身分關鍵字（有則更新 DB）
+      3. state=new 且身分未知 → 詢問身分（SR-039），截斷後續
+      4. 身分剛確認 → 問候語錄 + must-send cascade
+      5. 意圖辨識
+      6. greeting / transfer 快速路徑
+      7. 信心度過低 → fallback
+      8. 計算狀態轉移（產品 / 拜訪 / 報價關鍵字）
+      9. 語錄匹配（帶入 identity + state）
+      10. RAG + LLM
+      11. Fallback
+      每個有實質回覆的步驟結束前：附加追問、更新 DB、記錄歷史
 
     回傳：
         {
-            "reply": str,          # 回覆訊息
-            "intent": str,         # 辨識出的意圖
-            "confidence": float,   # 信心度
-            "source": str,         # 回覆來源（keyword / rag / fallback）
+            "reply":              str,
+            "intent":             str,
+            "confidence":         float,
+            "source":             str,   # keyword / scripted / rag / fallback
+            "attachments":        list,
+            "follow_up_messages": list,  # 身分確認後的後續必發訊息
         }
     """
     if not message or not message.strip():
@@ -313,11 +396,59 @@ def process_message(user_id: str, message: str, verbose: bool = False) -> dict:
             "intent": "other",
             "confidence": 0.0,
             "source": "fallback",
+            "attachments": [],
+            "follow_up_messages": [],
         }
 
     message = message.strip()
 
-    # ── Step 1：意圖辨識 ──
+    # ── Step 1：載入用戶狀態 ──
+    ustate = user_state.get_state(user_id)
+    if verbose:
+        print(f"  👤 狀態：identity={ustate['identity']}  state={ustate['state']}  focus={ustate['product_focus']}")
+
+    # ── Step 2：偵測身分 ──
+    detected_identity = user_state.detect_identity(message)
+    identity_just_confirmed = False
+
+    if detected_identity and ustate["identity"] != detected_identity:
+        user_state.update_state(user_id, identity=detected_identity, state="identified")
+        ustate["identity"] = detected_identity
+        ustate["state"] = "identified"
+        identity_just_confirmed = True
+        if verbose:
+            print(f"  🆔 身分確認：{detected_identity}")
+
+    # ── Step 3：state=new 且身分未知 → 詢問身分 ──
+    if ustate["state"] == "new":
+        ask = scripted_responses.get_by_id("SR-039")
+        reply = ask["content"] if ask else "您好～請問您是屋主、廠商還是設計師呢？"
+        _add_to_history(user_id, "user", message)
+        _add_to_history(user_id, "assistant", reply)
+        return {
+            "reply": reply,
+            "intent": "identity_check",
+            "confidence": 1.0,
+            "source": "scripted",
+            "attachments": [],
+            "follow_up_messages": [],
+        }
+
+    # ── Step 4：身分剛確認 → 問候語錄 + must-send cascade ──
+    if identity_just_confirmed:
+        reply, follow_ups = _build_identity_reply(detected_identity)
+        _add_to_history(user_id, "user", message)
+        _add_to_history(user_id, "assistant", reply)
+        return {
+            "reply": reply,
+            "intent": "identity_confirmed",
+            "confidence": 1.0,
+            "source": "scripted",
+            "attachments": [],
+            "follow_up_messages": follow_ups,
+        }
+
+    # ── Step 5：意圖辨識 ──
     intent_result = intent_classifier.classify(message)
     intent = intent_result["intent"]
     confidence = intent_result["confidence"]
@@ -326,24 +457,7 @@ def process_message(user_id: str, message: str, verbose: bool = False) -> dict:
     if verbose:
         print(f"  🏷️  意圖：{intent}  |  信心度：{confidence:.2f}  |  原因：{reason}")
 
-    # ── Step 2：信心度過低 → 引導客戶描述或轉人工 ──
-    if confidence < TRANSFER_THRESHOLD and intent not in ("greeting", "transfer"):
-        reply = handle_error("low_confidence", {
-            "user_id": user_id,
-            "message": message,
-        })
-        _add_to_history(user_id, "user", message)
-        _add_to_history(user_id, "assistant", reply)
-        return {
-            "reply": reply,
-            "intent": intent,
-            "confidence": confidence,
-            "source": "fallback",
-        }
-
-    # ── Step 3：根據意圖處理 ──
-
-    # greeting → 制式回覆，不走 RAG
+    # ── Step 6：快速路徑（greeting / transfer）──
     if intent == "greeting":
         reply = random.choice(GREETING_RESPONSES)
         _add_to_history(user_id, "user", message)
@@ -353,9 +467,10 @@ def process_message(user_id: str, message: str, verbose: bool = False) -> dict:
             "intent": intent,
             "confidence": confidence,
             "source": "keyword",
+            "attachments": [],
+            "follow_up_messages": [],
         }
 
-    # transfer → 轉人工訊息
     if intent == "transfer":
         reply = TRANSFER_RESPONSE
         _add_to_history(user_id, "user", message)
@@ -365,14 +480,67 @@ def process_message(user_id: str, message: str, verbose: bool = False) -> dict:
             "intent": intent,
             "confidence": confidence,
             "source": "keyword",
+            "attachments": [],
+            "follow_up_messages": [],
         }
 
-    # pricing / spec / catalog / service / store → RAG + LLM
-    if intent in ("pricing", "spec", "catalog", "service", "store"):
+    # ── Step 7：信心度過低 → fallback ──
+    if confidence < TRANSFER_THRESHOLD:
+        reply = handle_error("low_confidence", {"user_id": user_id, "message": message})
+        _add_to_history(user_id, "user", message)
+        _add_to_history(user_id, "assistant", reply)
+        return {
+            "reply": reply,
+            "intent": intent,
+            "confidence": confidence,
+            "source": "fallback",
+            "attachments": [],
+            "follow_up_messages": [],
+        }
+
+    # ── Step 8：計算狀態轉移 ──
+    transition = user_state.compute_transition(message, ustate)
+    if transition:
+        user_state.update_state(user_id, **transition)
+        ustate.update(transition)
+        if verbose:
+            print(f"  🔄 狀態轉移：{transition}")
+
+    # ── Step 9：語錄匹配（帶入 identity + state 上下文）──
+    scripted = scripted_responses.match_scripted_response(
+        user_message=message,
+        conversation_state=ustate,
+        user_identity=ustate.get("identity"),
+        channel=channel,
+    )
+    if scripted:
+        formatted = scripted_responses.format_reply(scripted)
+        reply = _append_probe(formatted["reply"], user_id, ustate, scripted.get("category"))
+        if verbose:
+            print(f"  📋 語錄命中：[{scripted['id']}] {scripted['title']}")
+        _add_to_history(user_id, "user", message)
+        _add_to_history(user_id, "assistant", reply)
+        return {
+            "reply": reply,
+            "intent": intent,
+            "confidence": confidence,
+            "source": "scripted",
+            "attachments": formatted["attachments"],
+            "follow_up_messages": [],
+            "scripted_id": formatted["scripted_id"],
+            "scripted_title": formatted["scripted_title"],
+        }
+
+    # ── Step 10：RAG + LLM ──
+    _RAG_INTENTS = {
+        "pricing", "spec", "catalog", "service", "store",
+        "hot_bend", "basin", "tv_wall", "material", "promotion",
+    }
+    if intent in _RAG_INTENTS:
         if verbose:
             print("  🔍 進入 RAG 搜尋流程...")
-
         reply = _generate_rag_response(user_id, message, intent)
+        reply = _append_probe(reply, user_id, ustate)
         _add_to_history(user_id, "user", message)
         _add_to_history(user_id, "assistant", reply)
         return {
@@ -380,13 +548,12 @@ def process_message(user_id: str, message: str, verbose: bool = False) -> dict:
             "intent": intent,
             "confidence": confidence,
             "source": "rag",
+            "attachments": [],
+            "follow_up_messages": [],
         }
 
-    # other → fallback
-    reply = handle_error("inappropriate", {
-        "user_id": user_id,
-        "message": message,
-    })
+    # ── Step 11：Fallback ──
+    reply = handle_error("inappropriate", {"user_id": user_id, "message": message})
     _add_to_history(user_id, "user", message)
     _add_to_history(user_id, "assistant", reply)
     return {
@@ -394,6 +561,8 @@ def process_message(user_id: str, message: str, verbose: bool = False) -> dict:
         "intent": intent,
         "confidence": confidence,
         "source": "fallback",
+        "attachments": [],
+        "follow_up_messages": [],
     }
 
 

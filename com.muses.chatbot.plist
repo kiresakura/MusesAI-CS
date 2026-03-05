@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 服務識別名稱 -->
+    <key>Label</key>
+    <string>com.muses.chatbot</string>
+
+    <!-- 工作目錄 -->
+    <key>WorkingDirectory</key>
+    <string>/Users/zhongliyuanshiqi/Developer/Muses-AI-CS</string>
+
+    <!-- 啟動指令 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/zhongliyuanshiqi/Developer/Muses-AI-CS/start_local.sh</string>
+    </array>
+
+    <!-- 開機自動啟動 -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- 掛掉自動重啟 -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- 重啟間隔（秒），避免快速循環 -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- 日誌輸出 -->
+    <key>StandardOutPath</key>
+    <string>/Users/zhongliyuanshiqi/Library/Logs/muses-chatbot/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/zhongliyuanshiqi/Library/Logs/muses-chatbot/stderr.log</string>
+
+    <!-- 環境變數（PATH 確保找到 python3 / gunicorn） -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>LANG</key>
+        <string>en_US.UTF-8</string>
+    </dict>
+</dict>
+</plist>
