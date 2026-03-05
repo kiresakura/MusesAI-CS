@@ -1,0 +1,31 @@
+# 環境變數（含 API 金鑰）
+.env
+
+# 資料檔案（知識庫原始資料、計畫文件）
+*.xlsx
+*.csv
+後端檔案存放處/knowledge-base.json
+
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 運行時產生的檔案
+chatbot.db
+error_log.json
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

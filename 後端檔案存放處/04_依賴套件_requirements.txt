@@ -1,0 +1,6 @@
+# 繆思精工 RAG 知識庫引擎 — 依賴套件
+
+requests>=2.31.0,<3.0.0     # HTTP 請求（呼叫 API）
+numpy>=1.24.0,<2.0.0        # 數值計算（向量運算、餘弦相似度）
+flask>=3.0.0,<4.0.0         # Web 伺服器
+gunicorn>=22.0.0,<23.0.0    # Production WSGI server
