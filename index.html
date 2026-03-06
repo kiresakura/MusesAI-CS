@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>繆思精工 — 客服管理後台</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-base: #1a1a2e;
+  --bg-panel: #16213e;
+  --bg-card: #0f3460;
+  --bg-hover: #1a2744;
+  --bg-input: #0d1b30;
+  --text-1: #e8e8e8;
+  --text-2: #8892b0;
+  --text-3: #5a6785;
+  --blue: #4361ee;
+  --blue-dim: #2d4199;
+  --green: #00b894;
+  --orange: #ff9f43;
+  --red: #ff6b6b;
+  --purple: #a855f7;
+  --bubble-user: #2d3748;
+  --bubble-agent: #4361ee;
+  --radius: 12px;
+  --sidebar-w: 320px;
+}
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-1);
+  overflow: hidden;
+}
+
+/* ── Layout ── */
+#app { display: flex; height: 100vh; }
+
+/* ── Sidebar ── */
+#sidebar {
+  width: var(--sidebar-w); min-width: var(--sidebar-w);
+  background: var(--bg-panel);
+  display: flex; flex-direction: column;
+  border-right: 1px solid rgba(255,255,255,0.06);
+}
+.sidebar-header { padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.sidebar-header h1 {
+  font-size: 18px; font-weight: 700;
+  background: linear-gradient(135deg, #4cc9f0, #4361ee);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.sidebar-header .subtitle { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.operator-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.operator-row label { font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.operator-row input {
+  flex: 1; background: var(--bg-input); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px; padding: 5px 10px; font-size: 12px; color: var(--text-1); outline: none;
+}
+.operator-row input:focus { border-color: var(--blue); }
+
+/* ── Tabs ── */
+.tab-bar {
+  display: flex; border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.tab-btn {
+  flex: 1; padding: 10px 0; text-align: center;
+  font-size: 13px; font-weight: 600; color: var(--text-3);
+  background: none; border: none; border-bottom: 2px solid transparent;
+  cursor: pointer; transition: all 0.15s;
+}
+.tab-btn:hover { color: var(--text-2); }
+.tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+.sidebar-stats {
+  display: flex; gap: 12px; padding: 10px 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.stat { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); }
+.stat-dot { width: 8px; height: 8px; border-radius: 50%; }
+.stat-dot.green { background: var(--green); }
+.stat-dot.orange { background: var(--orange); }
+.stat-dot.purple { background: var(--purple); }
+
+.tab-panel { display: none; flex: 1; overflow-y: auto; }
+.tab-panel.active { display: flex; flex-direction: column; flex: 1; }
+
+#user-list { flex: 1; overflow-y: auto; padding: 8px; }
+#broadcast-list { flex: 1; overflow-y: auto; padding: 8px; }
+
+/* ── User Item ── */
+.user-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px; border-radius: var(--radius); cursor: pointer; transition: background 0.15s;
+}
+.user-item:hover { background: var(--bg-hover); }
+.user-item.active { background: var(--bg-card); }
+.user-avatar {
+  width: 40px; height: 40px; border-radius: 50%; background: var(--bg-card);
+  display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0;
+}
+.user-info { flex: 1; min-width: 0; }
+.user-info .name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-info .preview { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+.user-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+.user-meta .time { font-size: 11px; color: var(--text-3); }
+.badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+.badge.auto { background: rgba(0,184,148,0.15); color: var(--green); }
+.badge.manual { background: rgba(255,159,67,0.15); color: var(--orange); }
+.badge.pending { background: rgba(67,97,238,0.15); color: var(--blue); }
+.badge.running { background: rgba(255,159,67,0.15); color: var(--orange); }
+.badge.completed { background: rgba(0,184,148,0.15); color: var(--green); }
+.badge.cancelled { background: rgba(255,107,107,0.15); color: var(--red); }
+
+/* ── Broadcast Item ── */
+.bcast-item {
+  padding: 12px; border-radius: var(--radius); cursor: pointer;
+  transition: background 0.15s; margin-bottom: 4px;
+}
+.bcast-item:hover { background: var(--bg-hover); }
+.bcast-item.active { background: var(--bg-card); }
+.bcast-item .bcast-name { font-size: 14px; font-weight: 600; }
+.bcast-item .bcast-meta { font-size: 12px; color: var(--text-3); margin-top: 4px; display: flex; gap: 8px; align-items: center; }
+.bcast-item .bcast-stats { font-size: 11px; color: var(--text-3); margin-top: 4px; }
+
+/* ── Main ── */
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#empty-state {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; color: var(--text-3);
+}
+#empty-state .icon { font-size: 48px; opacity: 0.3; }
+#empty-state .text { font-size: 15px; }
+
+/* ── Chat View ── */
+#chat-view { flex: 1; display: none; flex-direction: column; }
+#chat-view.visible { display: flex; }
+
+/* ── Tags Row ── */
+#tags-row {
+  display: flex; align-items: center; gap: 6px; padding: 8px 20px;
+  background: var(--bg-panel); border-bottom: 1px solid rgba(255,255,255,0.06);
+  flex-wrap: wrap; min-height: 38px;
+}
+.tag-chip {
+  font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 10px;
+  background: rgba(168,85,247,0.15); color: var(--purple); display: flex; align-items: center; gap: 4px;
+}
+.tag-chip .remove-tag { cursor: pointer; opacity: 0.6; font-size: 13px; }
+.tag-chip .remove-tag:hover { opacity: 1; }
+#add-tag-btn {
+  width: 24px; height: 24px; border-radius: 50%; border: 1px dashed var(--text-3);
+  background: none; color: var(--text-3); font-size: 14px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+#add-tag-btn:hover { border-color: var(--purple); color: var(--purple); }
+#tag-dropdown {
+  display: none; position: absolute; background: var(--bg-card); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 6px; z-index: 50; max-height: 240px; overflow-y: auto; min-width: 140px;
+}
+#tag-dropdown .tag-option {
+  padding: 6px 12px; font-size: 12px; border-radius: 4px; cursor: pointer;
+}
+#tag-dropdown .tag-option:hover { background: var(--bg-hover); }
+#tag-dropdown .tag-group-label { padding: 6px 12px; font-size: 10px; color: var(--text-3); font-weight: 700; text-transform: uppercase; }
+
+/* ── Toolbar ── */
+#toolbar {
+  display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+  background: var(--bg-panel); border-bottom: 1px solid rgba(255,255,255,0.06); flex-wrap: wrap;
+}
+#back-btn { display: none; background: none; border: none; color: var(--text-2); font-size: 14px; cursor: pointer; padding: 4px 8px; border-radius: 6px; }
+#back-btn:hover { background: var(--bg-card); }
+.toolbar-user { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.toolbar-user .uid { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toolbar-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+#toolbar-countdown { font-size: 12px; color: var(--orange); font-variant-numeric: tabular-nums; }
+
+.btn-sm {
+  background: var(--bg-card); border: 1px solid rgba(255,255,255,0.1); color: var(--text-2);
+  font-size: 12px; padding: 5px 12px; border-radius: 6px; cursor: pointer; white-space: nowrap; transition: all 0.15s;
+}
+.btn-sm:hover { background: var(--bg-hover); color: var(--text-1); }
+.btn-sm:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn-primary {
+  background: var(--blue); border: none; color: white; font-size: 13px; font-weight: 600;
+  padding: 8px 20px; border-radius: 8px; cursor: pointer; transition: background 0.15s;
+}
+.btn-primary:hover { background: var(--blue-dim); }
+.btn-danger { background: var(--red); }
+.btn-danger:hover { background: #e55a5a; }
+
+/* ── Toggle ── */
+.toggle-wrap { display: flex; align-items: center; gap: 8px; }
+.toggle-label { font-size: 12px; font-weight: 600; min-width: 32px; }
+.toggle-label.auto { color: var(--green); }
+.toggle-label.manual { color: var(--orange); }
+.toggle { position: relative; width: 44px; height: 24px; cursor: pointer; }
+.toggle input { display: none; }
+.toggle .slider { position: absolute; inset: 0; background: var(--green); border-radius: 12px; transition: 0.25s; }
+.toggle .slider::before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: 0.25s; }
+.toggle input:checked + .slider { background: var(--orange); }
+.toggle input:checked + .slider::before { transform: translateX(20px); }
+
+/* ── Messages ── */
+#chat-messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 4px; }
+.msg { display: flex; flex-direction: column; max-width: 75%; animation: fadeIn 0.2s ease; }
+.msg.user { align-self: flex-start; }
+.msg.assistant { align-self: flex-end; }
+.bubble { padding: 10px 14px; border-radius: 16px; font-size: 14px; line-height: 1.6; word-break: break-word; white-space: pre-wrap; }
+.msg.user .bubble { background: var(--bubble-user); color: var(--text-1); border-bottom-left-radius: 4px; }
+.msg.assistant .bubble { background: var(--bubble-agent); color: white; border-bottom-right-radius: 4px; }
+.msg .ts { font-size: 11px; color: var(--text-3); margin-top: 3px; padding: 0 4px; }
+.msg.user .ts { text-align: left; }
+.msg.assistant .ts { text-align: right; }
+.date-divider { text-align: center; font-size: 11px; color: var(--text-3); padding: 12px 0; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Input Area ── */
+#input-area { display: flex; align-items: flex-end; gap: 8px; padding: 12px 20px; background: var(--bg-panel); border-top: 1px solid rgba(255,255,255,0.06); }
+#msg-input {
+  flex: 1; background: var(--bg-input); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: var(--radius); padding: 10px 14px; font-size: 14px; color: var(--text-1);
+  resize: none; outline: none; max-height: 120px; font-family: inherit; line-height: 1.5;
+}
+#msg-input:focus { border-color: var(--blue); }
+#msg-input:disabled { opacity: 0.3; cursor: not-allowed; }
+#msg-input::placeholder { color: var(--text-3); }
+#send-btn {
+  background: var(--blue); border: none; color: white; font-size: 14px; font-weight: 600;
+  padding: 10px 20px; border-radius: var(--radius); cursor: pointer; transition: background 0.15s; white-space: nowrap;
+}
+#send-btn:hover { background: var(--blue-dim); }
+#send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.input-hint { font-size: 11px; color: var(--text-3); padding: 0 20px 8px; background: var(--bg-panel); }
+
+/* ── Broadcast View ── */
+#broadcast-view { flex: 1; display: none; flex-direction: column; overflow-y: auto; padding: 24px; }
+#broadcast-view.visible { display: flex; }
+.form-section { margin-bottom: 20px; }
+.form-section label { display: block; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
+.form-section input, .form-section textarea, .form-section select {
+  width: 100%; background: var(--bg-input); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px; padding: 10px 14px; font-size: 14px; color: var(--text-1);
+  outline: none; font-family: inherit;
+}
+.form-section input:focus, .form-section textarea:focus, .form-section select:focus { border-color: var(--blue); }
+.form-section textarea { resize: vertical; min-height: 80px; }
+.form-section select { appearance: none; cursor: pointer; }
+.form-section select option { background: var(--bg-card); }
+.tag-select-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-select-item {
+  font-size: 12px; padding: 5px 12px; border-radius: 8px; cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.1); color: var(--text-2); transition: all 0.15s;
+}
+.tag-select-item:hover { border-color: var(--purple); color: var(--purple); }
+.tag-select-item.selected { background: rgba(168,85,247,0.2); border-color: var(--purple); color: var(--purple); }
+.preview-box {
+  background: var(--bg-card); border-radius: 8px; padding: 12px 16px;
+  font-size: 13px; color: var(--text-2); margin: 12px 0;
+}
+.form-actions { display: flex; gap: 12px; margin-top: 20px; }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  :root { --sidebar-w: 100%; }
+  #sidebar { position: absolute; inset: 0; z-index: 10; }
+  #app.chat-active #sidebar { display: none; }
+  #app.chat-active #chat-view { display: flex; }
+  #back-btn { display: block; }
+}
+
+.spinner { width: 20px; height: 20px; border: 2px solid var(--text-3); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear infinite; margin: 40px auto; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px);
+  background: var(--bg-card); color: var(--text-1); padding: 10px 24px; border-radius: 8px;
+  font-size: 13px; border: 1px solid rgba(255,255,255,0.1);
+  transition: transform 0.3s ease, opacity 0.3s ease; opacity: 0; z-index: 100; pointer-events: none;
+}
+#toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <h1>繆思精工</h1>
+      <div class="subtitle">客服管理後台</div>
+      <div class="operator-row">
+        <label>操作員</label>
+        <input type="text" id="operator-name" placeholder="輸入姓名" />
+      </div>
+    </div>
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="chat">對話</button>
+      <button class="tab-btn" data-tab="broadcast">廣播</button>
+    </div>
+
+    <!-- Chat Tab -->
+    <div class="tab-panel active" id="panel-chat">
+      <div class="sidebar-stats">
+        <div class="stat"><span class="stat-dot green"></span><span id="stat-total">0 位用戶</span></div>
+        <div class="stat"><span class="stat-dot orange"></span><span id="stat-manual">0 位手動</span></div>
+      </div>
+      <div id="user-list"></div>
+    </div>
+
+    <!-- Broadcast Tab -->
+    <div class="tab-panel" id="panel-broadcast">
+      <div style="padding:10px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <div class="stat"><span class="stat-dot purple"></span><span id="stat-bcast">0 個任務</span></div>
+        <button class="btn-sm" id="new-bcast-btn">+ 新增</button>
+      </div>
+      <div id="broadcast-list"></div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="empty-state">
+      <div class="icon">💬</div>
+      <div class="text">選擇一位用戶開始查看對話</div>
+    </div>
+
+    <!-- Chat View -->
+    <div id="chat-view">
+      <div id="toolbar">
+        <button id="back-btn">← 返回</button>
+        <div class="toolbar-user">
+          <span class="uid" id="toolbar-uid"></span>
+          <span class="badge" id="toolbar-badge"></span>
+        </div>
+        <div class="toolbar-actions">
+          <span id="toolbar-countdown"></span>
+          <button class="btn-sm" id="extend-btn" style="display:none">+30 分鐘</button>
+          <div class="toggle-wrap">
+            <label class="toggle"><input type="checkbox" id="mode-toggle"><span class="slider"></span></label>
+            <span class="toggle-label auto" id="toggle-label">自動</span>
+          </div>
+        </div>
+      </div>
+      <div id="tags-row" style="position:relative">
+        <span style="font-size:11px;color:var(--text-3)">標籤：</span>
+        <div id="tag-chips"></div>
+        <button id="add-tag-btn">+</button>
+        <div id="tag-dropdown"></div>
+      </div>
+      <div id="chat-messages"></div>
+      <div class="input-hint" id="input-hint">切換為手動模式後即可輸入訊息</div>
+      <div id="input-area">
+        <textarea id="msg-input" rows="1" placeholder="輸入訊息..." disabled></textarea>
+        <button id="send-btn" disabled>發送</button>
+      </div>
+    </div>
+
+    <!-- Broadcast View -->
+    <div id="broadcast-view">
+      <h2 style="font-size:18px;margin-bottom:20px" id="bcast-form-title">新增廣播任務</h2>
+      <div class="form-section">
+        <label>任務名稱</label>
+        <input type="text" id="bcast-name" placeholder="例：年前電視牆促銷" />
+      </div>
+      <div class="form-section">
+        <label>目標標籤（點擊選擇）</label>
+        <div class="tag-select-grid" id="bcast-tags"></div>
+      </div>
+      <div class="form-section">
+        <label>匹配模式</label>
+        <select id="bcast-match">
+          <option value="any">任一符合（OR）</option>
+          <option value="all">全部符合（AND）</option>
+        </select>
+      </div>
+      <div class="form-section">
+        <label>訊息內容</label>
+        <textarea id="bcast-message" placeholder="輸入要發送的訊息..."></textarea>
+      </div>
+      <div class="form-section">
+        <label>排定發送時間</label>
+        <input type="datetime-local" id="bcast-time" />
+      </div>
+      <div class="preview-box" id="bcast-preview">選擇標籤後可預覽目標用戶數</div>
+      <div class="form-actions">
+        <button class="btn-primary" id="bcast-submit">建立任務</button>
+        <button class="btn-sm" id="bcast-cancel-form">取消</button>
+      </div>
+    </div>
+  </main>
+</div>
+<div id="toast"></div>
+
+<script>
+/* ── State ── */
+const S = {
+  users: [], selectedUserId: null, messages: [],
+  lastUpdateTs: new Date().toISOString(),
+  autoRevertAt: null, currentMode: 'auto',
+  pollingTimer: null, countdownTimer: null,
+  currentTab: 'chat', broadcasts: [],
+  selectedBcastTags: new Set(),
+  tagDefs: {}, tagLabels: {},
+  userTags: [],
+};
+
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+/* ── API ── */
+async function api(url, opts = {}) {
+  const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  return res.json();
+}
+
+/* ── Tabs ── */
+$$('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    $$('.tab-panel').forEach(p => p.classList.remove('active'));
+    $(`#panel-${btn.dataset.tab}`).classList.add('active');
+    S.currentTab = btn.dataset.tab;
+
+    // Show/hide main panels
+    if (btn.dataset.tab === 'broadcast') {
+      $('#chat-view').classList.remove('visible');
+      $('#empty-state').style.display = 'none';
+      $('#broadcast-view').classList.remove('visible');
+      if (!S.broadcasts.length) fetchBroadcasts();
+      showBroadcastEmpty();
+    } else {
+      $('#broadcast-view').classList.remove('visible');
+      if (!S.selectedUserId) {
+        $('#empty-state').style.display = '';
+        $('#chat-view').classList.remove('visible');
+      } else {
+        $('#empty-state').style.display = 'none';
+        $('#chat-view').classList.add('visible');
+      }
+    }
+  });
+});
+
+function showBroadcastEmpty() {
+  $('#empty-state').style.display = '';
+  $('#empty-state .icon').textContent = '📢';
+  $('#empty-state .text').textContent = '選擇任務查看詳情，或點「+ 新增」建立廣播';
+}
+
+/* ── Fetch Users ── */
+async function fetchUsers() {
+  try {
+    const data = await api('/api/conversations/recent');
+    S.users = data.users || [];
+    renderUserList();
+  } catch (e) { console.error('fetchUsers:', e); }
+}
+
+function renderUserList() {
+  const total = S.users.length;
+  const manual = S.users.filter(u => u.mode === 'manual').length;
+  $('#stat-total').textContent = `${total} 位用戶`;
+  $('#stat-manual').textContent = `${manual} 位手動`;
+
+  const el = $('#user-list');
+  el.innerHTML = S.users.map(u => {
+    const active = u.user_id === S.selectedUserId;
+    const shortId = u.user_id.length > 16 ? u.user_id.slice(-10) : u.user_id;
+    const preview = u.last_role === 'user' ? `客戶：${u.last_message}` : `客服：${u.last_message}`;
+    const bc = u.mode === 'manual' ? 'manual' : 'auto';
+    const bt = u.mode === 'manual' ? '手動' : '自動';
+    let extra = '';
+    if (u.mode === 'manual' && u.remaining_seconds > 0) extra = `<span style="font-size:10px;color:var(--orange)">${fmtCD(u.remaining_seconds)}</span>`;
+    return `<div class="user-item ${active?'active':''}" data-uid="${u.user_id}">
+      <div class="user-avatar">👤</div>
+      <div class="user-info"><div class="name">${esc(shortId)}</div><div class="preview">${esc(preview)}</div></div>
+      <div class="user-meta"><span class="time">${relTime(u.last_time)}</span><span class="badge ${bc}">${bt}</span>${extra}</div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.user-item').forEach(e => e.addEventListener('click', () => selectUser(e.dataset.uid)));
+}
+
+/* ── Select User ── */
+async function selectUser(uid) {
+  S.selectedUserId = uid;
+  $('#empty-state').style.display = 'none';
+  $('#broadcast-view').classList.remove('visible');
+  $('#chat-view').classList.add('visible');
+  $('#app').classList.add('chat-active');
+  $('#user-list').querySelectorAll('.user-item').forEach(e => e.classList.toggle('active', e.dataset.uid === uid));
+  $('#chat-messages').innerHTML = '<div class="spinner"></div>';
+  $('#toolbar-uid').textContent = uid.length > 20 ? uid.slice(-12) : uid;
+  try {
+    const [hist, tagsData] = await Promise.all([
+      api(`/api/conversations/${encodeURIComponent(uid)}/history`),
+      api(`/api/users/${encodeURIComponent(uid)}/tags`),
+    ]);
+    S.messages = hist.messages || [];
+    S.userTags = tagsData.tags || [];
+    updateModeUI(hist.mode);
+    renderMessages();
+    renderUserTags();
+    scrollBottom();
+  } catch (e) { $('#chat-messages').innerHTML = '<div style="text-align:center;color:var(--red);padding:40px">載入失敗</div>'; }
+}
+
+/* ── Render Messages ── */
+function renderMessages() {
+  const el = $('#chat-messages');
+  if (!S.messages.length) { el.innerHTML = '<div style="text-align:center;color:var(--text-3);padding:40px">尚無對話記錄</div>'; return; }
+  let html = '', lastDate = '';
+  S.messages.forEach(m => {
+    const d = m.timestamp.slice(0, 10);
+    if (d !== lastDate) { lastDate = d; html += `<div class="date-divider">${d}</div>`; }
+    html += `<div class="msg ${m.role}"><div class="bubble">${esc(m.content)}</div><div class="ts">${m.timestamp.slice(11,16)}</div></div>`;
+  });
+  el.innerHTML = html;
+}
+function scrollBottom() { requestAnimationFrame(() => { const el = $('#chat-messages'); el.scrollTop = el.scrollHeight; }); }
+function appendMsg(role, content, ts) {
+  const t = (ts || new Date().toISOString()).slice(11, 16);
+  const div = document.createElement('div'); div.className = `msg ${role}`;
+  div.innerHTML = `<div class="bubble">${esc(content)}</div><div class="ts">${t}</div>`;
+  $('#chat-messages').appendChild(div); scrollBottom();
+}
+
+/* ── Tags UI ── */
+function renderUserTags() {
+  const el = $('#tag-chips');
+  el.innerHTML = S.userTags.map(t =>
+    `<span class="tag-chip">${S.tagLabels[t.tag]||t.tag}<span class="remove-tag" data-tag="${t.tag}">&times;</span></span>`
+  ).join('');
+  el.querySelectorAll('.remove-tag').forEach(b => b.addEventListener('click', async () => {
+    await api(`/api/users/${encodeURIComponent(S.selectedUserId)}/tags/${b.dataset.tag}`, { method: 'DELETE' });
+    S.userTags = S.userTags.filter(t => t.tag !== b.dataset.tag);
+    renderUserTags();
+    toast('已移除標籤');
+  }));
+}
+
+$('#add-tag-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const dd = $('#tag-dropdown');
+  if (dd.style.display === 'block') { dd.style.display = 'none'; return; }
+  const existing = new Set(S.userTags.map(t => t.tag));
+  let html = '';
+  for (const [group, tags] of Object.entries(S.tagDefs)) {
+    html += `<div class="tag-group-label">${group}</div>`;
+    tags.forEach(tag => {
+      if (!existing.has(tag)) html += `<div class="tag-option" data-tag="${tag}">${S.tagLabels[tag]||tag}</div>`;
+    });
+  }
+  dd.innerHTML = html || '<div style="padding:8px;color:var(--text-3);font-size:12px">所有標籤已添加</div>';
+  dd.style.display = 'block';
+  dd.querySelectorAll('.tag-option').forEach(opt => opt.addEventListener('click', async () => {
+    dd.style.display = 'none';
+    const res = await api(`/api/users/${encodeURIComponent(S.selectedUserId)}/tags`, {
+      method: 'POST', body: JSON.stringify({ tag: opt.dataset.tag }),
+    });
+    S.userTags = res.tags || S.userTags;
+    renderUserTags();
+    toast('已新增標籤');
+  }));
+});
+document.addEventListener('click', () => { $('#tag-dropdown').style.display = 'none'; });
+
+/* ── Mode UI ── */
+function updateModeUI(m) {
+  if (!m) return;
+  S.currentMode = m.mode;
+  S.autoRevertAt = m.auto_revert_at ? new Date(m.auto_revert_at) : null;
+  const manual = m.mode === 'manual';
+  $('#mode-toggle').checked = manual;
+  $('#toggle-label').textContent = manual ? '手動' : '自動';
+  $('#toggle-label').className = `toggle-label ${manual ? 'manual' : 'auto'}`;
+  $('#toolbar-badge').textContent = manual ? '手動' : '自動';
+  $('#toolbar-badge').className = `badge ${manual ? 'manual' : 'auto'}`;
+  $('#extend-btn').style.display = manual ? 'inline-block' : 'none';
+  $('#toolbar-countdown').textContent = '';
+  $('#msg-input').disabled = !manual;
+  $('#send-btn').disabled = !manual;
+  $('#input-hint').style.display = manual ? 'none' : 'block';
+  if (manual) updateCountdown();
+}
+function updateCountdown() {
+  if (S.currentMode !== 'manual' || !S.autoRevertAt) { $('#toolbar-countdown').textContent = ''; return; }
+  const r = Math.max(0, Math.floor((S.autoRevertAt - new Date()) / 1000));
+  $('#toolbar-countdown').textContent = r > 0 ? `剩餘 ${fmtCD(r)}` : '即將切回自動';
+  if (r <= 0) updateModeUI({ mode: 'auto', auto_revert_at: null });
+}
+
+/* ── Toggle / Extend / Send ── */
+async function toggleMode() {
+  const newMode = $('#mode-toggle').checked ? 'manual' : 'auto';
+  const op = $('#operator-name').value.trim() || '管理員';
+  try {
+    const r = await api('/api/chat-mode', { method: 'POST', body: JSON.stringify({ user_id: S.selectedUserId, mode: newMode, operator: op }) });
+    updateModeUI(r); toast(newMode === 'manual' ? `手動模式（${op}）` : '已切回自動');
+    const u = S.users.find(u => u.user_id === S.selectedUserId);
+    if (u) { u.mode = r.mode; u.remaining_seconds = r.remaining_seconds; renderUserList(); }
+  } catch (e) { $('#mode-toggle').checked = !$('#mode-toggle').checked; toast('切換失敗'); }
+}
+async function extendMode() {
+  try { const r = await api('/api/chat-mode/extend', { method: 'POST', body: JSON.stringify({ user_id: S.selectedUserId, minutes: 30 }) }); updateModeUI(r); toast('已延長 30 分鐘'); }
+  catch (e) { toast('延長失敗'); }
+}
+async function sendMessage() {
+  const text = $('#msg-input').value.trim(); if (!text || !S.selectedUserId) return;
+  $('#msg-input').value = ''; autoResize(); $('#send-btn').disabled = true;
+  const ts = new Date().toISOString();
+  S.messages.push({ role: 'assistant', content: text, timestamp: ts }); appendMsg('assistant', text, ts);
+  try { const r = await api(`/api/conversations/${encodeURIComponent(S.selectedUserId)}/send`, { method: 'POST', body: JSON.stringify({ message: text }) }); S.lastUpdateTs = r.timestamp; }
+  catch (e) { toast('發送失敗'); }
+  $('#send-btn').disabled = S.currentMode !== 'manual';
+}
+
+/* ── Broadcast ── */
+async function fetchBroadcasts() {
+  try {
+    const data = await api('/api/broadcast/list');
+    S.broadcasts = data.tasks || [];
+    renderBroadcastList();
+  } catch (e) { console.error('fetchBroadcasts:', e); }
+}
+
+function renderBroadcastList() {
+  $('#stat-bcast').textContent = `${S.broadcasts.length} 個任務`;
+  const el = $('#broadcast-list');
+  el.innerHTML = S.broadcasts.map(b => {
+    const tags = b.target_tags.map(t => S.tagLabels[t] || t).join(', ');
+    const stats = b.status === 'completed' ? `已發 ${b.sent_count} / 失敗 ${b.fail_count}` :
+                  b.status === 'running' ? `發送中 ${b.sent_count}...` : '';
+    return `<div class="bcast-item" data-id="${b.task_id}">
+      <div class="bcast-name">${esc(b.name)}</div>
+      <div class="bcast-meta"><span class="badge ${b.status}">${b.status}</span><span>${relTime(b.scheduled_at)}</span></div>
+      <div class="bcast-meta" style="color:var(--text-3)">${esc(tags)} (${b.match_mode})</div>
+      ${stats ? `<div class="bcast-stats">${stats}</div>` : ''}
+    </div>`;
+  }).join('') || '<div style="text-align:center;color:var(--text-3);padding:40px;font-size:13px">尚無廣播任務</div>';
+
+  el.querySelectorAll('.bcast-item').forEach(e => e.addEventListener('click', () => viewBroadcast(e.dataset.id)));
+}
+
+function viewBroadcast(taskId) {
+  const b = S.broadcasts.find(t => t.task_id === taskId);
+  if (!b) return;
+  $('#empty-state').style.display = 'none';
+  $('#chat-view').classList.remove('visible');
+  const v = $('#broadcast-view');
+  v.classList.add('visible');
+  $('#bcast-form-title').textContent = `任務：${b.name}`;
+  $('#bcast-name').value = b.name; $('#bcast-name').disabled = true;
+  $('#bcast-message').value = b.message_content; $('#bcast-message').disabled = true;
+  $('#bcast-time').value = b.scheduled_at.slice(0, 16); $('#bcast-time').disabled = true;
+  $('#bcast-match').value = b.match_mode; $('#bcast-match').disabled = true;
+  S.selectedBcastTags = new Set(b.target_tags);
+  renderBcastTags(true);
+  const statusText = b.status === 'completed' ? `已完成：發送 ${b.sent_count}，失敗 ${b.fail_count}` :
+                     b.status === 'running' ? `發送中...已發 ${b.sent_count}` :
+                     b.status === 'cancelled' ? '已取消' : `等待發送`;
+  $('#bcast-preview').textContent = statusText;
+  $('#bcast-submit').style.display = 'none';
+  const cancelBtn = $('#bcast-cancel-form');
+  if (b.status === 'pending') {
+    cancelBtn.textContent = '取消任務'; cancelBtn.className = 'btn-primary btn-danger';
+    cancelBtn.onclick = async () => {
+      await api(`/api/broadcast/${b.task_id}`, { method: 'DELETE' });
+      toast('任務已取消'); fetchBroadcasts(); showBroadcastForm();
+    };
+  } else {
+    cancelBtn.textContent = '返回'; cancelBtn.className = 'btn-sm';
+    cancelBtn.onclick = () => { showBroadcastEmpty(); v.classList.remove('visible'); };
+  }
+}
+
+function showBroadcastForm() {
+  $('#empty-state').style.display = 'none';
+  const v = $('#broadcast-view'); v.classList.add('visible');
+  $('#bcast-form-title').textContent = '新增廣播任務';
+  ['bcast-name', 'bcast-message', 'bcast-time', 'bcast-match'].forEach(id => { $(` #${id}`).disabled = false; $(`#${id}`).value = ''; });
+  $('#bcast-match').value = 'any';
+  const now = new Date(); now.setMinutes(now.getMinutes() + 30);
+  $('#bcast-time').value = now.toISOString().slice(0, 16);
+  S.selectedBcastTags.clear();
+  renderBcastTags(false);
+  $('#bcast-preview').textContent = '選擇標籤後可預覽目標用戶數';
+  $('#bcast-submit').style.display = '';
+  const cancelBtn = $('#bcast-cancel-form');
+  cancelBtn.textContent = '取消'; cancelBtn.className = 'btn-sm';
+  cancelBtn.onclick = () => { v.classList.remove('visible'); showBroadcastEmpty(); };
+}
+
+function renderBcastTags(readonly) {
+  const el = $('#bcast-tags');
+  let html = '';
+  for (const [group, tags] of Object.entries(S.tagDefs)) {
+    tags.forEach(tag => {
+      const sel = S.selectedBcastTags.has(tag) ? 'selected' : '';
+      html += `<div class="tag-select-item ${sel}" data-tag="${tag}" ${readonly?'style="pointer-events:none"':''}>${S.tagLabels[tag]||tag}</div>`;
+    });
+  }
+  el.innerHTML = html;
+  if (!readonly) {
+    el.querySelectorAll('.tag-select-item').forEach(e => e.addEventListener('click', () => {
+      const tag = e.dataset.tag;
+      if (S.selectedBcastTags.has(tag)) S.selectedBcastTags.delete(tag); else S.selectedBcastTags.add(tag);
+      e.classList.toggle('selected');
+      previewBroadcast();
+    }));
+  }
+}
+
+async function previewBroadcast() {
+  if (!S.selectedBcastTags.size) { $('#bcast-preview').textContent = '選擇標籤後可預覽目標用戶數'; return; }
+  const tags = [...S.selectedBcastTags].join(',');
+  const mode = $('#bcast-match').value;
+  try {
+    const r = await api(`/api/broadcast/preview?tags=${encodeURIComponent(tags)}&match_mode=${mode}`);
+    $('#bcast-preview').textContent = `符合 ${r.total_matched} 人，排除近 24h 已發 ${r.excluded} 人，實際發送 ${r.will_send} 人`;
+  } catch (e) { $('#bcast-preview').textContent = '預覽失敗'; }
+}
+
+$('#bcast-match').addEventListener('change', previewBroadcast);
+
+$('#bcast-submit').addEventListener('click', async () => {
+  const name = $('#bcast-name').value.trim();
+  const msg = $('#bcast-message').value.trim();
+  const time = $('#bcast-time').value;
+  if (!name || !msg || !time || !S.selectedBcastTags.size) { toast('請填寫所有欄位並選擇標籤'); return; }
+  try {
+    await api('/api/broadcast', { method: 'POST', body: JSON.stringify({
+      name, target_tags: [...S.selectedBcastTags], match_mode: $('#bcast-match').value,
+      message_content: msg, scheduled_at: time, created_by: $('#operator-name').value.trim() || '管理員',
+    })});
+    toast('廣播任務已建立'); fetchBroadcasts();
+    $('#broadcast-view').classList.remove('visible'); showBroadcastEmpty();
+  } catch (e) { toast('建立失敗'); }
+});
+
+$('#new-bcast-btn').addEventListener('click', showBroadcastForm);
+
+/* ── Polling ── */
+async function pollUpdates() {
+  try {
+    const data = await api(`/api/conversations/updates?since=${encodeURIComponent(S.lastUpdateTs)}`);
+    if (data.server_time) S.lastUpdateTs = data.server_time;
+    if (data.modes) {
+      for (const [uid, mode] of Object.entries(data.modes)) {
+        const u = S.users.find(u => u.user_id === uid);
+        if (u) { u.mode = mode.mode; u.remaining_seconds = mode.remaining_seconds; u.auto_revert_at = mode.auto_revert_at; }
+        if (uid === S.selectedUserId) updateModeUI(mode);
+      }
+    }
+    if (data.messages && data.messages.length > 0) {
+      const byUser = {}; data.messages.forEach(m => { byUser[m.user_id] = m; });
+      for (const [uid, m] of Object.entries(byUser)) {
+        const u = S.users.find(u => u.user_id === uid);
+        if (u) { u.last_message = m.content.slice(0, 50); u.last_role = m.role; u.last_time = m.timestamp; }
+        else { S.users.unshift({ user_id: uid, last_message: m.content.slice(0, 50), last_role: m.role, last_time: m.timestamp, mode: 'auto', remaining_seconds: null }); }
+      }
+      renderUserList();
+      if (S.selectedUserId) {
+        data.messages.filter(m => m.user_id === S.selectedUserId).forEach(m => {
+          if (!S.messages.some(em => em.timestamp === m.timestamp && em.content === m.content && em.role === m.role)) {
+            S.messages.push({ role: m.role, content: m.content, timestamp: m.timestamp }); appendMsg(m.role, m.content, m.timestamp);
+          }
+        });
+      }
+    }
+  } catch (e) { console.error('poll:', e); }
+}
+
+/* ── Utilities ── */
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function relTime(iso) {
+  if (!iso) return '';
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 60) return '剛剛'; if (diff < 3600) return `${Math.floor(diff/60)} 分鐘前`;
+  if (diff < 86400) return `${Math.floor(diff/3600)} 小時前`; return iso.slice(5, 10);
+}
+function fmtCD(s) { if (s <= 0) return '0:00'; return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`; }
+function toast(msg) { const el = $('#toast'); el.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2500); }
+function autoResize() { const el = $('#msg-input'); el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 120) + 'px'; }
+
+/* ── Events ── */
+$('#mode-toggle').addEventListener('change', toggleMode);
+$('#extend-btn').addEventListener('click', extendMode);
+$('#send-btn').addEventListener('click', sendMessage);
+$('#back-btn').addEventListener('click', () => {
+  S.selectedUserId = null; $('#app').classList.remove('chat-active');
+  $('#chat-view').classList.remove('visible'); $('#empty-state').style.display = ''; renderUserList();
+});
+$('#msg-input').addEventListener('input', autoResize);
+$('#msg-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+$('#operator-name').addEventListener('change', () => { localStorage.setItem('muses_operator', $('#operator-name').value.trim()); });
+
+/* ── Init ── */
+(async function init() {
+  const saved = localStorage.getItem('muses_operator');
+  if (saved) $('#operator-name').value = saved;
+  const [, tagData] = await Promise.all([fetchUsers(), api('/api/tags/definitions')]);
+  S.tagDefs = tagData.tags || {};
+  S.tagLabels = tagData.labels || {};
+  S.pollingTimer = setInterval(pollUpdates, 5000);
+  S.countdownTimer = setInterval(() => {
+    updateCountdown();
+    S.users.forEach(u => { if (u.mode === 'manual' && u.remaining_seconds > 0) u.remaining_seconds--; });
+  }, 1000);
+})();
+</script>
+</body>
+</html>

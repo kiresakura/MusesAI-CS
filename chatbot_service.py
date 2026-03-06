@@ -25,6 +25,7 @@
 import json
 import os
 import random
+import re
 import requests
 import sqlite3
 import sys
@@ -35,6 +36,7 @@ from datetime import datetime, timedelta
 import intent_classifier
 import scripted_responses
 import user_state
+import user_tags
 from error_handler import handle_error, DB_PATH
 from rag_config import (
     GREETING_RESPONSES,
@@ -183,6 +185,111 @@ def _ensure_rag_loaded():
 
 
 # ============================================================
+# 後處理過濾器
+# ============================================================
+
+# AI 套話 + 身份洩漏黑名單
+_AI_CLICHES = [
+    # AI 套話
+    "您好", "以下是", "首先", "其次", "再者", "最後",
+    "總結來說", "總的來說", "總結而言",
+    "希望以上資訊對您有幫助", "希望以上內容對您有幫助",
+    "希望這些資訊對您有幫助", "希望對您有所幫助",
+    "很抱歉，我目前無法提供相關資訊",
+    "根據您的需求", "根據您提供的資訊",
+    "為您整理", "為您說明", "為您介紹",
+    # AI 身份洩漏
+    "作為AI", "作為 AI", "身為AI", "身為 AI",
+    "我是AI", "我是 AI", "AI客服", "AI 客服",
+    "作為人工智慧", "作為語言模型", "作為機器人",
+    "我是機器人", "我是虛擬助手", "我是智能客服",
+    "轉真人客服", "轉人工客服", "轉接真人", "轉接人工",
+]
+
+# 連續 3 個以上 emoji
+_EMOJI_FLOOD = re.compile(
+    r"("
+    r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+    r"\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF"
+    r"\U00002702-\U000027B0\U0000FE00-\U0000FE0F\U0001F1E0-\U0001F1FF"
+    r"\u2600-\u26FF\u2700-\u27BF]"
+    r"\s*){4,}"
+)
+
+_TRUNCATION_NOTICE = "\n\n細節比較多，我分幾次跟你說～"
+
+
+def sanitize_response(text: str) -> str:
+    """
+    LLM 回覆的後處理過濾器。
+
+    1. 移除 markdown 符號（保留文字內容）
+    2. 移除 AI 套話
+    3. 將超過 3 個連續 emoji 截為 2 個
+    4. 超過 200 字時截斷並補提示
+    """
+    if not text:
+        return text
+
+    # 1. 移除 markdown 格式（保留文字）
+    # **粗體** → 粗體, __底線__ → 底線, `code` → code
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"__(.+?)__", r"\1", text)
+    text = re.sub(r"`(.+?)`", r"\1", text)
+    # 標題 ### → 移除符號
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    # 列表 - / * / + 開頭 → 移除符號
+    text = re.sub(r"^[-*+]\s+", "", text, flags=re.MULTILINE)
+    # 引用 > → 移除
+    text = re.sub(r"^>\s*", "", text, flags=re.MULTILINE)
+
+    # 2. 移除 AI 套話
+    for cliche in _AI_CLICHES:
+        # 如果套話出現在行首，移除該整行
+        text = re.sub(
+            rf"^[^\S\n]*{re.escape(cliche)}[^\n]*\n?",
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+        # 如果套話出現在句中（逗號後等），只移除該片段
+        text = text.replace(cliche, "")
+
+    # 3. 超過 3 個連續 emoji → 保留前 2 個
+    def _trim_emoji(m):
+        emojis = re.findall(
+            r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+            r"\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF"
+            r"\U00002702-\U000027B0\U0000FE00-\U0000FE0F\U0001F1E0-\U0001F1FF"
+            r"\u2600-\u26FF\u2700-\u27BF]",
+            m.group(0),
+        )
+        return "".join(emojis[:2])
+
+    text = _EMOJI_FLOOD.sub(_trim_emoji, text)
+
+    # 4. 清理多餘空行
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.strip()
+
+    # 5. 清理後如果變空了，給保底回覆
+    if not text:
+        return "這個我幫你問一下，稍等喔～"
+
+    # 6. 超過 200 字截斷
+    if len(text) > 200:
+        # 在 200 字內找最後一個換行或句號截斷
+        cut = text[:200]
+        last_break = max(cut.rfind("\n"), cut.rfind("。"), cut.rfind("～"), cut.rfind("！"))
+        if last_break > 100:
+            text = text[:last_break + 1].rstrip() + _TRUNCATION_NOTICE
+        else:
+            text = cut.rstrip() + _TRUNCATION_NOTICE
+
+    return text
+
+
+# ============================================================
 # RAG + LLM 回覆生成
 # ============================================================
 
@@ -258,9 +365,9 @@ def _generate_rag_response(user_id: str, message: str, intent: str) -> str:
             },
         ]
 
-        # 呼叫 LLM
+        # 呼叫 LLM + 後處理
         answer = rag_search.call_llm(messages)
-        return answer
+        return sanitize_response(answer)
 
     except requests.exceptions.Timeout:
         return handle_error("api_error", {
@@ -392,7 +499,7 @@ def process_message(
     """
     if not message or not message.strip():
         return {
-            "reply": "請問有什麼需要幫忙的嗎？😊",
+            "reply": "有什麼想問的嗎？😊",
             "intent": "other",
             "confidence": 0.0,
             "source": "fallback",
@@ -418,6 +525,9 @@ def process_message(
         identity_just_confirmed = True
         if verbose:
             print(f"  🆔 身分確認：{detected_identity}")
+
+    # ── Auto-tagging（每則訊息都分析，不影響回覆流程）──
+    user_tags.auto_tag_from_message(user_id, message, identity=ustate.get("identity"))
 
     # ── Step 3：state=new 且身分未知 → 詢問身分 ──
     if ustate["state"] == "new":

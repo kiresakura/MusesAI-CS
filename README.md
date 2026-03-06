@@ -27,7 +27,7 @@
   └─ 信心度低  → fallback 引導                    │ 無命中
                                                   ▼
                                             ┌──────────┐
-                                            │ RAG + LLM │  向量檢索 → Gemini 生成
+                                            │ RAG + LLM │  向量檢索 → LLM 生成
                                             └──────────┘
 ```
 
@@ -44,15 +44,54 @@ identified（身分已知）
   └─ 報價意圖   → pending_info → 提供資訊後回到 identified
 ```
 
+## 功能總覽
+
+### 核心客服
+
+- **意圖辨識**：15 類意圖，keyword scoring 優先，LLM fallback
+- **預存語錄**：48 條語錄依身分/渠道過濾匹配
+- **RAG 問答**：向量檢索 + LLM 生成回覆
+- **多輪對話**：用戶狀態機追蹤身分、產品興趣、對話階段
+
+### 人工介入（chat_mode）
+
+- 客服人員可將用戶切換為「手動模式」，AI 暫停回覆
+- 手動模式預設 60 分鐘後自動回到 AI 模式
+- 支援延長手動時間（+30 分鐘）
+- 背景排程器每 60 秒檢查過期的手動模式
+
+### 用戶標籤系統（user_tags）
+
+- 4 大類 15 個標籤：身分、產品興趣、狀態、區域
+- AI 自動打標：根據訊息關鍵字自動標記用戶
+- 手動打標：管理後台可新增/移除標籤
+- 標籤查詢：支援 any（OR）/ all（AND）匹配模式
+
+### 廣播排程（broadcast）
+
+- 建立定時廣播任務：指定標籤 + 訊息內容 + 排程時間
+- 預覽目標用戶數（含 24 小時去重排除）
+- 背景排程器每 60 秒檢查待發任務
+- 逐一發送（1 秒間隔，遵守 API rate limit）
+- 支援中途取消
+
+### Web 管理後台
+
+- 純 HTML + CSS + JS 單頁應用（深色主題）
+- **對話頁**：用戶列表、聊天氣泡、模式切換、手動回覆、標籤管理
+- **廣播頁**：任務列表、新增表單（標籤選擇、匹配模式、排程）、任務詳情
+- 5 秒輪詢即時更新
+
 ## 技術棧
 
 | 組件 | 技術 |
 |------|------|
-| LLM | Google Gemini 3.1 Pro（via OpenRouter） |
+| LLM | Qwen 3.5 397B-A17B MoE（via OpenRouter） |
 | Embedding | OpenAI text-embedding-3-large（via OpenRouter） |
 | 向量搜尋 | NumPy 餘弦相似度（JSON 本地向量庫） |
 | Web 框架 | Flask + Gunicorn |
-| 資料儲存 | SQLite WAL（對話歷史 + 用戶狀態 + 錯誤日誌） |
+| 資料儲存 | SQLite WAL（對話歷史 + 用戶狀態 + 錯誤日誌 + 標籤 + 廣播） |
+| 前端 | 純 HTML + vanilla JS + CSS（單一 index.html） |
 | 日誌 | RotatingFileHandler（10MB x 5）+ stdout |
 | 部署 | macOS launchd / Docker / Fly.io |
 | 對外穿透 | Cloudflare Tunnel |
@@ -62,17 +101,21 @@ identified（身分已知）
 
 ```
 MusesAI-CS/
-├── web_server.py            # Flask HTTP 伺服器 + Messenger Webhook + /health
-├── chatbot_service.py       # 客服主服務（對話管理 + 流程編排）
+├── web_server.py            # Flask HTTP 伺服器 + Messenger Webhook + 管理 API
+├── chatbot_service.py       # 客服主服務（對話管理 + 流程編排 + 自動打標）
 ├── intent_classifier.py     # 意圖辨識（15 類，keyword scoring + LLM fallback）
 ├── scripted_responses.py    # 預存語錄匹配引擎
 ├── scripted_responses.json  # 預存語錄資料庫（48 條）
 ├── user_state.py            # 用戶身分識別 + 對話狀態機 + 追問邏輯
+├── chat_mode.py             # 人工介入模式管理（手動/自動切換 + 自動回歸）
+├── user_tags.py             # 用戶標籤系統（CRUD + 關鍵字自動打標）
+├── broadcast.py             # 廣播任務排程（建立 + 執行 + 去重 + rate limit）
 ├── rag_config.py            # 集中設定檔（API key、prompt、參數）
 ├── rag_search.py            # RAG 搜尋引擎（embedding + 向量檢索 + LLM）
 ├── embed_knowledge.py       # 知識庫向量化腳本
 ├── error_handler.py         # 錯誤處理與 fallback
 ├── knowledge-vectors.json   # 預計算的向量資料庫
+├── index.html               # Web 管理後台（單頁應用）
 │
 ├── start_local.sh           # 本地啟動腳本（gunicorn + .env 載入 + 前置檢查）
 ├── com.muses.chatbot.plist  # macOS launchd 服務（開機自啟 + 自動重啟）
@@ -163,53 +206,50 @@ python intent_classifier.py
 
 ## API 端點
 
-### `GET /health`
+### 客服 API
 
-健康檢查，回傳服務狀態、運行時間、SQLite 連線狀態。
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| `GET` | `/health` | 健康檢查 |
+| `POST` | `/chat` | 客服對話 |
+| `GET/POST` | `/webhook` | Messenger Webhook |
 
-```json
-{
-  "status": "ok",
-  "version": "1.0.0",
-  "uptime": "3d 12h 5m 30s",
-  "uptime_seconds": 302730,
-  "entries": 108,
-  "sqlite_ok": true,
-  "last_successful_reply": "2026-03-06 14:30:00"
-}
-```
+### 管理後台 API
 
-### `POST /chat`
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| `GET` | `/` | Web 管理後台 |
+| `GET` | `/api/conversations/recent` | 最近對話列表 |
+| `GET` | `/api/conversations/<user_id>/history` | 對話歷史 |
+| `GET` | `/api/conversations/updates` | 增量更新 |
+| `POST` | `/api/conversations/<user_id>/send` | 手動發送訊息 |
 
-客服對話 API。
+### 人工介入 API
 
-**Request:**
-```json
-{
-  "message": "繆思岩一坪多少錢？",
-  "user_id": "user_123",
-  "channel": "universal"
-}
-```
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| `POST` | `/api/chat-mode` | 切換手動/自動模式 |
+| `GET` | `/api/chat-mode/<user_id>` | 查詢用戶模式 |
+| `GET` | `/api/chat-mode/list` | 列出手動模式用戶 |
+| `POST` | `/api/chat-mode/extend` | 延長手動時間 |
 
-**Response:**
-```json
-{
-  "reply": "繆思岩每坪參考價格約...",
-  "intent": "pricing",
-  "confidence": 0.92,
-  "source": "rag",
-  "attachments": [],
-  "follow_up_messages": []
-}
-```
+### 標籤 API
 
-### `GET /webhook` & `POST /webhook`
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| `GET` | `/api/tags/definitions` | 取得標籤定義 |
+| `GET` | `/api/users/<user_id>/tags` | 查詢用戶標籤 |
+| `POST` | `/api/users/<user_id>/tags` | 新增標籤 |
+| `DELETE` | `/api/users/<user_id>/tags/<tag>` | 移除標籤 |
 
-Meta Messenger Webhook 端點。
+### 廣播 API
 
-- `GET`：Hub 驗證（比對 `hub.verify_token`，回傳 `hub.challenge`）
-- `POST`：接收用戶訊息 → 意圖辨識 → 回覆（含 X-Hub-Signature-256 驗證）
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| `POST` | `/api/broadcast` | 建立廣播任務 |
+| `GET` | `/api/broadcast/list` | 列出廣播任務 |
+| `GET` | `/api/broadcast/preview` | 預覽目標用戶數 |
+| `DELETE` | `/api/broadcast/<task_id>` | 取消廣播任務 |
 
 ## 意圖辨識系統
 
